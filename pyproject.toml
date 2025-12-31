@@ -1,0 +1,17 @@
+[project]
+name = "yet-another-python-backup-script"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Scott Hendrickson",email = "scott@drskippy.net"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml (>=6.0.3,<7.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

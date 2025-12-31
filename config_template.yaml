@@ -1,0 +1,26 @@
+# Yet Another Python Backup Script Configuration Template
+# Copy this file to config.yaml and customize with your settings
+
+# MySQL Backup Configuration
+mysql:
+  host: localhost
+  port: 3306
+  username: your_mysql_username
+  password: your_mysql_password
+  compress: true
+  databases:
+    - database_name_1
+    - database_name_2
+    - database_name_3
+
+# Backup Root Path Configuration
+backup:
+  root_path: /path/to/backup/destination
+  # Backups will be organized by year in subdirectories
+
+# File/Directory Backup Configuration
+file_backups:
+  sources:
+    - /path/to/directory1
+    - /path/to/directory2
+    - /path/to/file.txt
