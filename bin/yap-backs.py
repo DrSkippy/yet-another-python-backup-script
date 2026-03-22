@@ -7,6 +7,7 @@ import subprocess
 import argparse
 import yaml
 import logging
+import os
 
 
 def create_mysql_dumps(databases, dest_dir, host='localhost', port=3306, 
@@ -150,6 +151,132 @@ def create_mysql_dumps(databases, dest_dir, host='localhost', port=3306,
                     logger.debug(f"Removing partial dump file: {dump_file}")
                     dump_file.unlink()
     
+    return created_dumps
+
+
+def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
+                            username=None, password=None, compress=True, dryrun=True):
+    """
+    Create pg_dump files for a list of PostgreSQL databases.
+
+    Parameters
+    ----------
+    databases : list of str
+        Names of databases to dump
+    dest_dir : Path or str
+        Destination directory for dump files
+    host : str, optional
+        PostgreSQL host (default: 'localhost')
+    port : int, optional
+        PostgreSQL port (default: 5432)
+    username : str
+        PostgreSQL username
+    password : str
+        PostgreSQL password (passed via PGPASSWORD env var)
+    compress : bool, optional
+        If True, gzip the dump files (default: True)
+    dryrun : bool, optional
+        If True, log actions without creating files (default: True)
+
+    Returns
+    -------
+    list of Path
+        Paths to the created dump files
+    """
+    logger = logging.getLogger(__name__)
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    logger.debug(f"PostgreSQL dump destination directory: {dest_dir}")
+
+    created_dumps = []
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    logger.info(f"Starting PostgreSQL dumps for {len(databases)} database(s)")
+
+    # Build subprocess env with PGPASSWORD set
+    env = os.environ.copy()
+    if password:
+        env['PGPASSWORD'] = password
+
+    for db_name in databases:
+        extension = '.sql.gz' if compress else '.sql'
+        dump_file = dest_dir / f"{db_name}_{timestamp}{extension}"
+
+        cmd = [
+            'pg_dump',
+            f'--host={host}',
+            f'--port={port}',
+            f'--username={username}',
+            db_name,
+        ]
+
+        logger.debug(f"Dump file will be created at: {dump_file}")
+
+        if dryrun:
+            logger.info(f"[DRY RUN] Dumping database: {db_name}")
+            logger.debug(f"[DRY RUN] Command: {' '.join(cmd)}")
+            created_dumps.append(dump_file)
+            logger.info(f"[DRY RUN] Would create: {dump_file}")
+        else:
+            try:
+                logger.info(f"Dumping database: {db_name}")
+
+                if compress:
+                    logger.debug(f"Using gzip compression for {db_name}")
+                    with open(dump_file, 'wb') as f:
+                        dump_proc = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            env=env
+                        )
+                        gzip_proc = subprocess.Popen(
+                            ['gzip'],
+                            stdin=dump_proc.stdout,
+                            stdout=f,
+                            stderr=subprocess.PIPE
+                        )
+                        dump_proc.stdout.close()
+
+                        gzip_proc.communicate()
+                        dump_returncode = dump_proc.wait()
+
+                        if dump_returncode != 0:
+                            _, dump_stderr = dump_proc.communicate()
+                            raise subprocess.CalledProcessError(
+                                dump_returncode, cmd, stderr=dump_stderr
+                            )
+
+                    file_size = dump_file.stat().st_size
+                    logger.debug(f"Dump file size: {file_size} bytes ({file_size / 1024 / 1024:.2f} MB)")
+                else:
+                    logger.debug(f"Dumping {db_name} without compression")
+                    with open(dump_file, 'w') as f:
+                        subprocess.run(
+                            cmd,
+                            stdout=f,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            check=True,
+                            env=env
+                        )
+
+                    file_size = dump_file.stat().st_size
+                    logger.debug(f"Dump file size: {file_size} bytes ({file_size / 1024 / 1024:.2f} MB)")
+
+                created_dumps.append(dump_file)
+                logger.info(f"Successfully created dump: {dump_file}")
+
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error dumping {db_name}: {e.stderr}")
+                if dump_file.exists():
+                    logger.debug(f"Removing partial dump file: {dump_file}")
+                    dump_file.unlink()
+            except Exception as e:
+                logger.error(f"Unexpected error dumping {db_name}: {e}")
+                if dump_file.exists():
+                    logger.debug(f"Removing partial dump file: {dump_file}")
+                    dump_file.unlink()
+
     return created_dumps
 
 
@@ -421,6 +548,31 @@ if __name__ == '__main__':
     logger.info("")
 
     #########################
+    # PostgreSQL Backups
+    #########################
+
+    pg_dumps = []
+    if 'postgresql' in config:
+        logger.info("Starting PostgreSQL database backups...")
+        pg_config = config['postgresql']
+        logger.debug(f"PostgreSQL host: {pg_config['host']}:{pg_config.get('port', 5432)}")
+        logger.debug(f"Databases to backup: {', '.join(pg_config['databases'])}")
+
+        pg_dumps = create_postgresql_dumps(
+            pg_config['databases'],
+            dest_dir=backup_root_path / "postgresql_backups",
+            host=pg_config['host'],
+            port=pg_config.get('port', 5432),
+            username=pg_config['username'],
+            password=pg_config['password'],
+            compress=pg_config.get('compress', True),
+            dryrun=dryrun
+        )
+
+        logger.info(f"Completed PostgreSQL backups: {len(pg_dumps)} dump file(s)")
+        logger.info("")
+
+    #########################
     # File/Directory Backups
     #########################
 
@@ -441,8 +593,8 @@ if __name__ == '__main__':
     logger.info("=" * 60)
     if dryrun:
         logger.warning("Dry run completed - no actual backups were created")
-        logger.info(f"Would have created {len(dumps)} MySQL dumps and {len(created_files)} tarballs")
+        logger.info(f"Would have created {len(dumps)} MySQL dump(s), {len(pg_dumps)} PostgreSQL dump(s), and {len(created_files)} tarball(s)")
     else:
         logger.info("Backup completed successfully!")
-        logger.info(f"Total: {len(dumps)} MySQL dumps and {len(created_files)} tarballs")
+        logger.info(f"Total: {len(dumps)} MySQL dump(s), {len(pg_dumps)} PostgreSQL dump(s), and {len(created_files)} tarball(s)")
     logger.info("=" * 60)

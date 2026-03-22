@@ -13,6 +13,16 @@ mysql:
     - database_name_2
     - database_name_3
 
+# PostgreSQL Backup Configuration
+postgresql:
+  host: localhost
+  port: 5432
+  username: your_postgresql_username
+  password: your_postgresql_password
+  compress: true
+  databases:
+    - database_name_1
+
 # Backup Root Path Configuration
 backup:
   root_path: /path/to/backup/destination
