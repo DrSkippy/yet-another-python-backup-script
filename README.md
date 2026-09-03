@@ -1,10 +1,11 @@
 # Yet Another Python Backup Script (YAP-BackS)
 
-A flexible Python-based backup solution for MySQL databases and file systems. Create automated backups with configurable settings through a simple YAML configuration file.
+A flexible Python-based backup solution for MySQL databases, PostgreSQL databases, and file systems. Create automated backups with configurable settings through a simple YAML configuration file.
 
 ## Features
 
 - **MySQL Database Backups**: Automated mysqldump with optional compression
+- **PostgreSQL Database Backups**: Automated pg_dump with optional compression
 - **File/Directory Backups**: Create gzipped tarballs of specified paths
 - **YAML Configuration**: Centralized configuration management
 - **Dry Run by Default**: Preview mode is the default; pass `--execute` to actually write backups
@@ -15,7 +16,8 @@ A flexible Python-based backup solution for MySQL databases and file systems. Cr
 
 - Python 3.7+
 - Poetry (for dependency management)
-- MySQL client tools (for database backups)
+- MySQL client tools (`mysqldump`, for MySQL backups)
+- PostgreSQL client tools (`pg_dump`, for PostgreSQL backups)
 - gzip (for compression)
 
 ## Installation
@@ -46,12 +48,22 @@ mysql:
   host: localhost
   port: 3306
   username: backup_user
-  password: your_secure_password
+  # password is read from $YAP_MYSQL_PASSWORD (see .envrc.example) unless set here
   compress: true
   databases:
     - database1
     - database2
     - database3
+
+# PostgreSQL Backup Configuration (optional section)
+postgresql:
+  host: localhost
+  port: 5432
+  username: backup_user
+  # password is read from $YAP_POSTGRES_PASSWORD (see .envrc.example) unless set here
+  compress: true
+  databases:
+    - database1
 
 # Backup Root Path Configuration
 backup:
@@ -65,6 +77,12 @@ file_backups:
     - /home/user/projects
     - /etc/important-configs
     - /opt/application-data
+
+# Logging Configuration (optional section)
+logging:
+  level: INFO
+  file: logs/yap-backs.log
+  # CLI --log-level/--log-file override these if given.
 ```
 
 ### Configuration Options
@@ -73,9 +91,18 @@ file_backups:
 - `host`: MySQL server hostname (default: localhost)
 - `port`: MySQL server port (default: 3306)
 - `username`: MySQL username for authentication
-- `password`: MySQL password for authentication
+- `password`: MySQL password (optional — prefer `YAP_MYSQL_PASSWORD` in `.envrc`)
 - `compress`: Enable gzip compression for dump files (default: true)
 - `databases`: List of database names to backup
+
+#### PostgreSQL Section (optional)
+- `host`: PostgreSQL server hostname (default: localhost)
+- `port`: PostgreSQL server port (default: 5432)
+- `username`: PostgreSQL username for authentication
+- `password`: PostgreSQL password (optional — prefer `YAP_POSTGRES_PASSWORD` in `.envrc`)
+- `compress`: Enable gzip compression for dump files (default: true)
+- `databases`: List of database names to backup
+- Omit this whole section if you have no PostgreSQL databases to back up
 
 #### Backup Section
 - `root_path`: Root directory where backups will be stored
@@ -84,6 +111,11 @@ file_backups:
 #### File Backups Section
 - `sources`: List of file or directory paths to backup
   - Each path will be archived into a separate gzipped tarball
+
+#### Logging Section (optional)
+- `level`: Logging level — `DEBUG`, `INFO`, `WARNING`, or `ERROR` (default: `INFO`)
+- `file`: Log file path (default: `logs/yap-backs.log`)
+- CLI flags `--log-level`/`--log-file` take priority over these if given
 
 ## Usage
 
@@ -128,6 +160,8 @@ Backups are organized with the following structure:
     │   ├── database1_20250131_1430.sql.gz
     │   ├── database2_20250131_1430.sql.gz
     │   └── database3_20250131_1430.sql.gz
+    ├── postgresql_backups/
+    │   └── database1_20250131_1430.sql.gz
     └── backup-home-user-documents_2025-01-31_1430.tar.gz
     └── backup-home-user-projects_2025-01-31_1430.tar.gz
     └── backup-etc-important-configs_2025-01-31_1430.tar.gz
@@ -172,15 +206,21 @@ poetry run python bin/yap-backs.py --config new-config.yaml
    chmod 600 .envrc
    ```
 
-2. **Use Dedicated Backup User**: Create a MySQL user with minimal required permissions:
+2. **Use Dedicated Backup User (MySQL)**: Create a MySQL user with minimal required permissions:
    ```sql
    CREATE USER 'backup_user'@'localhost' IDENTIFIED BY 'secure_password';
    GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER ON *.* TO 'backup_user'@'localhost';
    ```
 
-3. **Secure Backup Storage**: Ensure backup destination has appropriate access controls
+3. **Use a Read-Only Role (PostgreSQL)**: Rather than a superuser, grant the backup user the built-in read-only role (PostgreSQL 14+) — this covers every current *and future* database on the cluster without per-database grants:
+   ```sql
+   GRANT pg_read_all_data TO backup_user;
+   ```
+   Avoid using the `postgres` superuser account for backups — it bypasses all permission checks (read, write, DDL) across the whole cluster, which is a much larger blast radius than a backup tool needs.
 
-4. **Don't Commit Secrets**: Add `config.yaml` to `.gitignore` to avoid committing sensitive credentials
+4. **Secure Backup Storage**: Ensure backup destination has appropriate access controls
+
+5. **Don't Commit Secrets**: `config.yaml` and `.envrc` are already in `.gitignore`; keep it that way
 
 ## Troubleshooting
 
@@ -192,12 +232,28 @@ If you encounter MySQL connection errors, verify:
 - User has appropriate permissions
 - Host and port settings are correct
 
+### PostgreSQL Connection or Permission Errors
+
+`pg_dump` fails with `permission denied for table ...` when the configured
+user can connect but lacks `SELECT` on that database's tables — common when
+a database was provisioned with its own app-specific owning role. Fix by
+granting the backup user the read-only role (see Security Considerations
+above): `GRANT pg_read_all_data TO backup_user;`. This is a one-time,
+cluster-wide grant — no need to repeat it per database.
+
+Also verify:
+- PostgreSQL server is running and accessible on the configured host/port
+- Credentials are correct (`YAP_POSTGRES_PASSWORD` in `.envrc`, or `password` in config.yaml)
+
 ### Permission Errors
 
 If you encounter permission errors:
 - Ensure the script has read access to source directories
 - Ensure the script has write access to backup destination
-- Check that the MySQL user has necessary database privileges
+- Check that the MySQL/PostgreSQL user has necessary database privileges
+- The script exits non-zero on any dump/tarball failure — check the log
+  file (default `logs/yap-backs.log`) for `ERROR` lines rather than
+  assuming a completed run means everything succeeded
 
 ### Missing Dependencies
 
