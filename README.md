@@ -7,7 +7,7 @@ A flexible Python-based backup solution for MySQL databases and file systems. Cr
 - **MySQL Database Backups**: Automated mysqldump with optional compression
 - **File/Directory Backups**: Create gzipped tarballs of specified paths
 - **YAML Configuration**: Centralized configuration management
-- **Dry Run Mode**: Test backup operations without creating actual files
+- **Dry Run by Default**: Preview mode is the default; pass `--execute` to actually write backups
 - **Organized Storage**: Automatic organization by year
 - **Command-line Interface**: Simple CLI with flexible options
 
@@ -89,30 +89,32 @@ file_backups:
 
 ### Basic Commands
 
-Run backup with default configuration:
+Run in dry-run mode (default; preview without creating files):
 ```bash
 poetry run python bin/yap-backs.py
 ```
 
-Run in dry-run mode (preview without creating files):
+Actually write backups:
 ```bash
-poetry run python bin/yap-backs.py --dry-run
+poetry run python bin/yap-backs.py --execute
 ```
 
 Use a custom configuration file:
 ```bash
-poetry run python bin/yap-backs.py --config /path/to/custom-config.yaml
+poetry run python bin/yap-backs.py --config /path/to/custom-config.yaml --execute
 ```
 
 Combine options:
 ```bash
-poetry run python bin/yap-backs.py --config prod-config.yaml --dry-run
+poetry run python bin/yap-backs.py --config prod-config.yaml --execute
 ```
 
 ### Command-line Arguments
 
 - `--config`, `-c`: Path to configuration file (default: `config.yaml`)
-- `--dry-run`, `-n`: Perform dry run without creating actual backups
+- `--execute`, `-x`: Actually perform the backup (default is a dry run; no files are written without this flag)
+- `--log-level`, `-l`: Logging level, `DEBUG`/`INFO`/`WARNING`/`ERROR` (default: from `config.yaml`'s `logging.level`, else `INFO`)
+- `--log-file`: Log file path (default: from `config.yaml`'s `logging.file`, else `logs/yap-backs.log`)
 - `--help`, `-h`: Show help message and exit
 
 ## Output Structure
@@ -138,8 +140,10 @@ Backups are organized with the following structure:
 Create a cron job for daily backups at 2 AM:
 
 ```bash
-0 2 * * * cd /path/to/yet-another-python-backup-script && /usr/local/bin/poetry run python bin/yap-backs.py
+0 2 * * * cd /path/to/yet-another-python-backup-script && /usr/local/bin/poetry run python bin/yap-backs.py --execute
 ```
+
+Note: `--execute` is required — without it the script only runs a dry-run preview and writes nothing.
 
 ### Example 2: Multiple Configuration Files
 
@@ -155,17 +159,17 @@ poetry run python bin/yap-backs.py --config config-dev.yaml
 
 ### Example 3: Testing Configuration
 
-Always test new configurations with dry-run first:
+Always test new configurations with dry-run first (the default with no flags):
 
 ```bash
-poetry run python bin/yap-backs.py --config new-config.yaml --dry-run
+poetry run python bin/yap-backs.py --config new-config.yaml
 ```
 
 ## Security Considerations
 
-1. **Protect Configuration Files**: Ensure `config.yaml` has restricted permissions since it contains database credentials:
+1. **Credentials via .envrc**: Database passwords are not stored in `config.yaml`. Set `YAP_MYSQL_PASSWORD` and `YAP_POSTGRES_PASSWORD` in `.envrc` (loaded via direnv; see `.envrc.example`). Ensure `.envrc` has restricted permissions:
    ```bash
-   chmod 600 config.yaml
+   chmod 600 .envrc
    ```
 
 2. **Use Dedicated Backup User**: Create a MySQL user with minimal required permissions:

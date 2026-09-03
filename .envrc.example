@@ -1,0 +1,4 @@
+export PYTHONPATH=$(pwd)
+
+export YAP_MYSQL_PASSWORD=changeme
+export YAP_POSTGRES_PASSWORD=changeme

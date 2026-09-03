@@ -34,14 +34,14 @@ def create_mysql_dumps(databases, dest_dir, host='localhost', port=3306,
     
     Returns
     -------
-    list of Path
-        Paths to the created dump files
-    
+    tuple of (list of Path, list of str)
+        Paths to the created dump files, and names of databases that failed
+
     Examples
     --------
     >>> dbs = ['production_db', 'analytics_db', 'staging_db']
-    >>> dumps = create_mysql_dumps(
-    ...     dbs, 
+    >>> dumps, failed = create_mysql_dumps(
+    ...     dbs,
     ...     '/backups/mysql',
     ...     username='backup_user',
     ...     password='secure_password'
@@ -53,6 +53,7 @@ def create_mysql_dumps(databases, dest_dir, host='localhost', port=3306,
     logger.debug(f"MySQL dump destination directory: {dest_dir}")
 
     created_dumps = []
+    failed_databases = []
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info(f"Starting MySQL dumps for {len(databases)} database(s)")
 
@@ -141,17 +142,19 @@ def create_mysql_dumps(databases, dest_dir, host='localhost', port=3306,
 
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error dumping {db_name}: {e.stderr}")
+                failed_databases.append(db_name)
                 # Remove partial dump file if it exists
                 if dump_file.exists():
                     logger.debug(f"Removing partial dump file: {dump_file}")
                     dump_file.unlink()
             except Exception as e:
                 logger.error(f"Unexpected error dumping {db_name}: {e}")
+                failed_databases.append(db_name)
                 if dump_file.exists():
                     logger.debug(f"Removing partial dump file: {dump_file}")
                     dump_file.unlink()
-    
-    return created_dumps
+
+    return created_dumps, failed_databases
 
 
 def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
@@ -180,8 +183,8 @@ def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
 
     Returns
     -------
-    list of Path
-        Paths to the created dump files
+    tuple of (list of Path, list of str)
+        Paths to the created dump files, and names of databases that failed
     """
     logger = logging.getLogger(__name__)
     dest_dir = Path(dest_dir)
@@ -189,6 +192,7 @@ def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
     logger.debug(f"PostgreSQL dump destination directory: {dest_dir}")
 
     created_dumps = []
+    failed_databases = []
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info(f"Starting PostgreSQL dumps for {len(databases)} database(s)")
 
@@ -268,16 +272,18 @@ def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
 
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error dumping {db_name}: {e.stderr}")
+                failed_databases.append(db_name)
                 if dump_file.exists():
                     logger.debug(f"Removing partial dump file: {dump_file}")
                     dump_file.unlink()
             except Exception as e:
                 logger.error(f"Unexpected error dumping {db_name}: {e}")
+                failed_databases.append(db_name)
                 if dump_file.exists():
                     logger.debug(f"Removing partial dump file: {dump_file}")
                     dump_file.unlink()
 
-    return created_dumps
+    return created_dumps, failed_databases
 
 
 def create_gzipped_tarballs(backup_list, dryrun=True):
@@ -294,20 +300,21 @@ def create_gzipped_tarballs(backup_list, dryrun=True):
     
     Returns
     -------
-    list of Path
-        Paths to the created tarball files
-    
+    tuple of (list of Path, list of str)
+        Paths to the created tarball files, and filenames that failed
+
     Examples
     --------
     >>> backup_jobs = [
     ...     (Path('/home/user/documents'), Path('/backups'), 'documents_backup'),
-    ...     ([Path('/home/user/photos'), Path('/home/user/videos')], 
+    ...     ([Path('/home/user/photos'), Path('/home/user/videos')],
     ...      Path('/backups'), 'media_backup'),
     ... ]
-    >>> created = create_gzipped_tarballs(backup_jobs)
+    >>> created, failed = create_gzipped_tarballs(backup_jobs)
     """
     logger = logging.getLogger(__name__)
     created_tarballs = []
+    failed_tarballs = []
     logger.info(f"Starting tarball creation for {len(backup_list)} backup job(s)")
 
     for source_paths, backup_root, filename in backup_list:
@@ -356,14 +363,15 @@ def create_gzipped_tarballs(backup_list, dryrun=True):
                 logger.info(f"Successfully created tarball: {tarball_path}")
             except Exception as e:
                 logger.error(f"Error creating tarball {tarball_path}: {e}")
+                failed_tarballs.append(filename)
                 if tarball_path.exists():
                     logger.debug(f"Removing partial tarball: {tarball_path}")
                     tarball_path.unlink()
                 continue
 
         created_tarballs.append(tarball_path)
-    
-    return created_tarballs
+
+    return created_tarballs, failed_tarballs
 
 
 def parse_arguments():
@@ -388,25 +396,27 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        '--dry-run',
-        '-n',
+        '--execute',
+        '-x',
         action='store_true',
-        help='Perform a dry run without creating actual backups'
+        help='Actually perform the backup. Without this flag, the script '
+             'runs as a dry run and creates no files.'
     )
 
     parser.add_argument(
         '--log-level',
         '-l',
         type=str,
-        default='INFO',
+        default=None,
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-        help='Set logging level (default: INFO)'
+        help='Set logging level (default: value from config.yaml, or INFO)'
     )
 
     parser.add_argument(
         '--log-file',
         type=str,
-        help='Optional log file path (logs to console if not specified)'
+        default=None,
+        help='Log file path (default: value from config.yaml, or logs/yap-backs.log)'
     )
 
     return parser.parse_args()
@@ -447,6 +457,7 @@ def setup_logging(log_level='INFO', log_file=None):
 
     # File handler (optional)
     if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(numeric_level)
         file_handler.setFormatter(formatter)
@@ -492,10 +503,25 @@ def load_config(config_path):
 if __name__ == '__main__':
     # Parse command-line arguments
     args = parse_arguments()
-    dryrun = args.dry_run
+    dryrun = not args.execute
+
+    # Peek at the config file's logging section before full validation, so
+    # a config-declared log level/file take effect for the earliest log
+    # lines too. CLI flags always win over config.yaml.
+    default_log_file = str(Path(__file__).resolve().parent.parent / "logs" / "yap-backs.log")
+    logging_defaults = {}
+    try:
+        with open(args.config, 'r') as f:
+            _peek = yaml.safe_load(f) or {}
+        logging_defaults = _peek.get('logging', {}) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        pass
+
+    log_level = args.log_level or logging_defaults.get('level', 'INFO')
+    log_file = args.log_file or logging_defaults.get('file', default_log_file)
 
     # Setup logging
-    setup_logging(log_level=args.log_level, log_file=args.log_file)
+    setup_logging(log_level=log_level, log_file=log_file)
     logger = logging.getLogger(__name__)
 
     logger.info("=" * 60)
@@ -533,18 +559,28 @@ if __name__ == '__main__':
     logger.debug(f"MySQL host: {mysql_config['host']}:{mysql_config.get('port', 3306)}")
     logger.debug(f"Databases to backup: {', '.join(mysql_config['databases'])}")
 
-    dumps = create_mysql_dumps(
+    mysql_password = mysql_config.get('password') or os.environ.get('YAP_MYSQL_PASSWORD')
+    if not mysql_password:
+        logger.error(
+            "No MySQL password found. Set YAP_MYSQL_PASSWORD in .envrc "
+            "or a 'password' key under mysql: in config.yaml."
+        )
+        exit(1)
+
+    dumps, failed_mysql = create_mysql_dumps(
         mysql_config['databases'],
         dest_dir=backup_root_path / "mysql_backups",
         host=mysql_config['host'],
         port=mysql_config.get('port', 3306),
         username=mysql_config['username'],
-        password=mysql_config['password'],
+        password=mysql_password,
         compress=mysql_config.get('compress', True),
         dryrun=dryrun
     )
 
     logger.info(f"Completed MySQL backups: {len(dumps)} dump file(s)")
+    if failed_mysql:
+        logger.error(f"FAILED MySQL database(s): {', '.join(failed_mysql)}")
     logger.info("")
 
     #########################
@@ -552,24 +588,35 @@ if __name__ == '__main__':
     #########################
 
     pg_dumps = []
+    failed_pg = []
     if 'postgresql' in config:
         logger.info("Starting PostgreSQL database backups...")
         pg_config = config['postgresql']
         logger.debug(f"PostgreSQL host: {pg_config['host']}:{pg_config.get('port', 5432)}")
         logger.debug(f"Databases to backup: {', '.join(pg_config['databases'])}")
 
-        pg_dumps = create_postgresql_dumps(
+        pg_password = pg_config.get('password') or os.environ.get('YAP_POSTGRES_PASSWORD')
+        if not pg_password:
+            logger.error(
+                "No PostgreSQL password found. Set YAP_POSTGRES_PASSWORD in "
+                ".envrc or a 'password' key under postgresql: in config.yaml."
+            )
+            exit(1)
+
+        pg_dumps, failed_pg = create_postgresql_dumps(
             pg_config['databases'],
             dest_dir=backup_root_path / "postgresql_backups",
             host=pg_config['host'],
             port=pg_config.get('port', 5432),
             username=pg_config['username'],
-            password=pg_config['password'],
+            password=pg_password,
             compress=pg_config.get('compress', True),
             dryrun=dryrun
         )
 
         logger.info(f"Completed PostgreSQL backups: {len(pg_dumps)} dump file(s)")
+        if failed_pg:
+            logger.error(f"FAILED PostgreSQL database(s): {', '.join(failed_pg)}")
         logger.info("")
 
     #########################
@@ -584,17 +631,27 @@ if __name__ == '__main__':
 
     backup_jobs = [(x, backup_root_path, y) for x, y in zip(source_paths, source_names)]
 
-    created_files = create_gzipped_tarballs(backup_jobs, dryrun)
+    created_files, failed_files = create_gzipped_tarballs(backup_jobs, dryrun)
 
     logger.info(f"Completed file backups: {len(created_files)} tarball(s)")
+    if failed_files:
+        logger.error(f"FAILED tarball(s): {', '.join(failed_files)}")
     logger.info("")
 
     # Final summary
+    all_failures = failed_mysql + failed_pg + failed_files
     logger.info("=" * 60)
     if dryrun:
         logger.warning("Dry run completed - no actual backups were created")
         logger.info(f"Would have created {len(dumps)} MySQL dump(s), {len(pg_dumps)} PostgreSQL dump(s), and {len(created_files)} tarball(s)")
+        logger.info("Run with --execute to actually write backups.")
+        logger.info("=" * 60)
+    elif all_failures:
+        logger.error(f"Backup completed WITH {len(all_failures)} FAILURE(S): {', '.join(all_failures)}")
+        logger.info(f"Total: {len(dumps)} MySQL dump(s), {len(pg_dumps)} PostgreSQL dump(s), and {len(created_files)} tarball(s) succeeded")
+        logger.info("=" * 60)
+        exit(1)
     else:
         logger.info("Backup completed successfully!")
         logger.info(f"Total: {len(dumps)} MySQL dump(s), {len(pg_dumps)} PostgreSQL dump(s), and {len(created_files)} tarball(s)")
-    logger.info("=" * 60)
+        logger.info("=" * 60)

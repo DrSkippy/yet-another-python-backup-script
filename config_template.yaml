@@ -6,7 +6,7 @@ mysql:
   host: localhost
   port: 3306
   username: your_mysql_username
-  password: your_mysql_password
+  # password is read from $YAP_MYSQL_PASSWORD (see .envrc.example) unless set here
   compress: true
   databases:
     - database_name_1
@@ -18,7 +18,7 @@ postgresql:
   host: localhost
   port: 5432
   username: your_postgresql_username
-  password: your_postgresql_password
+  # password is read from $YAP_POSTGRES_PASSWORD (see .envrc.example) unless set here
   compress: true
   databases:
     - database_name_1
@@ -34,3 +34,9 @@ file_backups:
     - /path/to/directory1
     - /path/to/directory2
     - /path/to/file.txt
+
+# Logging Configuration
+logging:
+  level: INFO
+  file: logs/yap-backs.log
+  # CLI --log-level/--log-file override these if given.
