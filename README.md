@@ -176,15 +176,28 @@ Backups are organized with the following structure:
 
 ## Examples
 
-### Example 1: Daily Automated Backups
+### Example 1: Scheduled Backups via Cron
 
-Create a cron job for daily backups at 2 AM:
+Use the `bin/cron-yap-backs.sh` wrapper rather than calling the script directly.
+Cron has no direnv and a minimal `PATH`, so the wrapper:
+
+- sources `.envrc` for the database passwords
+- sets `PATH` so Poetry finds the project's Python 3.11 virtualenv
+- refuses to run if the backup destination isn't mounted (so a missing NFS
+  share can't silently fill the local disk)
+- takes a `flock` lock so overlapping runs are skipped
+- runs `yap-backs.py --execute`
+
+Edit `BACKUP_MOUNT`, `POETRY` and `PATH` at the top of the wrapper for your
+machine, then add a crontab entry, e.g. 2 AM on Tue/Thu/Sat:
 
 ```bash
-0 2 * * * cd /path/to/yet-another-python-backup-script && /usr/local/bin/poetry run python bin/yap-backs.py --execute
+0 2 * * 2,4,6 /path/to/yet-another-python-backup-script/bin/cron-yap-backs.sh >> /path/to/yet-another-python-backup-script/logs/cron.log 2>&1
 ```
 
-Note: `--execute` is required — without it the script only runs a dry-run preview and writes nothing.
+Running the wrapper by hand is also the most faithful way to test a real
+scheduled run. Note: `--execute` is required if you call `yap-backs.py`
+directly — without it the script only runs a dry-run preview and writes nothing.
 
 ### Example 2: Multiple Configuration Files
 
@@ -204,6 +217,40 @@ Always test new configurations with dry-run first (the default with no flags):
 
 ```bash
 poetry run python bin/yap-backs.py --config new-config.yaml
+```
+
+### Example 4: Verifying a Backup Run
+
+After a real run (the full run takes minutes when large databases are
+included), check that it succeeded and the files are sound:
+
+```bash
+# Run summary — should end with "Backup completed successfully!" and no ERROR lines
+grep -E "ERROR|Backup completed|Total:" logs/yap-backs.log | tail -5
+
+# One dump per configured database, plus _globals, for the run's timestamp
+ls -la /path/to/backup/destination/2025/postgresql_backups/ | grep 20250131_143000
+
+# Every gzip file is intact (slow for multi-GB dumps)
+for f in /path/to/backup/destination/2025/postgresql_backups/*20250131_143000*.gz; do
+  gzip -t "$f" || echo "CORRUPT: $f"
+done
+
+# Spot-check contents: roles in the globals dump, table data in a database dump
+zcat .../_globals_20250131_143000.sql.gz | grep -c "^CREATE ROLE"
+zcat .../database1_20250131_143000.sql.gz | grep -c "^COPY"
+```
+
+Compare dump sizes against the previous run — a large unexpected drop is
+worth investigating even when the run reports success.
+
+To confirm nothing on the PostgreSQL cluster is missing from `databases:`,
+list the cluster's databases and compare (the `postgres` maintenance database
+is usually empty and can be skipped):
+
+```bash
+psql -h localhost -p 5432 -U backup_user -d postgres -Atc \
+  "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1;"
 ```
 
 ## Security Considerations
