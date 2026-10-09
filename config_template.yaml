@@ -20,6 +20,7 @@ postgresql:
   username: your_postgresql_username
   # password is read from $YAP_POSTGRES_PASSWORD (see .envrc.example) unless set here
   compress: true
+  dump_globals: true  # roles/passwords/tablespaces via pg_dumpall --globals-only
   databases:
     - database_name_1
 

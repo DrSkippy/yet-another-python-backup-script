@@ -5,7 +5,8 @@ A flexible Python-based backup solution for MySQL databases, PostgreSQL database
 ## Features
 
 - **MySQL Database Backups**: Automated mysqldump with optional compression
-- **PostgreSQL Database Backups**: Automated pg_dump with optional compression
+- **PostgreSQL Database Backups**: Automated pg_dump with optional compression, plus
+  cluster globals (roles, tablespaces) via `pg_dumpall --globals-only`
 - **File/Directory Backups**: Create gzipped tarballs of specified paths
 - **YAML Configuration**: Centralized configuration management
 - **Dry Run by Default**: Preview mode is the default; pass `--execute` to actually write backups
@@ -14,10 +15,10 @@ A flexible Python-based backup solution for MySQL databases, PostgreSQL database
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.11+
 - Poetry (for dependency management)
 - MySQL client tools (`mysqldump`, for MySQL backups)
-- PostgreSQL client tools (`pg_dump`, for PostgreSQL backups)
+- PostgreSQL client tools (`pg_dump` and `pg_dumpall`, for PostgreSQL backups)
 - gzip (for compression)
 
 ## Installation
@@ -62,6 +63,7 @@ postgresql:
   username: backup_user
   # password is read from $YAP_POSTGRES_PASSWORD (see .envrc.example) unless set here
   compress: true
+  dump_globals: true  # roles/passwords/tablespaces via pg_dumpall --globals-only
   databases:
     - database1
 
@@ -101,6 +103,10 @@ logging:
 - `username`: PostgreSQL username for authentication
 - `password`: PostgreSQL password (optional — prefer `YAP_POSTGRES_PASSWORD` in `.envrc`)
 - `compress`: Enable gzip compression for dump files (default: true)
+- `dump_globals`: Also dump cluster-wide globals (roles, role password hashes,
+  tablespaces) with `pg_dumpall --globals-only` to `_globals_<timestamp>.sql.gz`.
+  `pg_dump` omits these, so they're needed to rebuild a cluster from scratch
+  (default: true). The file contains password hashes — protect it accordingly.
 - `databases`: List of database names to backup
 - Omit this whole section if you have no PostgreSQL databases to back up
 
@@ -157,13 +163,14 @@ Backups are organized with the following structure:
 /backup/root/path/
 └── 2025/
     ├── mysql_backups/
-    │   ├── database1_20250131_1430.sql.gz
-    │   ├── database2_20250131_1430.sql.gz
-    │   └── database3_20250131_1430.sql.gz
+    │   ├── database1_20250131_143000.sql.gz
+    │   ├── database2_20250131_143000.sql.gz
+    │   └── database3_20250131_143000.sql.gz
     ├── postgresql_backups/
-    │   └── database1_20250131_1430.sql.gz
-    └── backup-home-user-documents_2025-01-31_1430.tar.gz
-    └── backup-home-user-projects_2025-01-31_1430.tar.gz
+    │   ├── _globals_20250131_143000.sql.gz
+    │   └── database1_20250131_143000.sql.gz
+    ├── backup-home-user-documents_2025-01-31_1430.tar.gz
+    ├── backup-home-user-projects_2025-01-31_1430.tar.gz
     └── backup-etc-important-configs_2025-01-31_1430.tar.gz
 ```
 
@@ -216,9 +223,11 @@ poetry run python bin/yap-backs.py --config new-config.yaml
    ```sql
    GRANT pg_read_all_data TO backup_user;
    ```
+   This role is also sufficient for the `dump_globals` step (`pg_dumpall --globals-only`), including role password hashes — no superuser needed.
+
    Avoid using the `postgres` superuser account for backups — it bypasses all permission checks (read, write, DDL) across the whole cluster, which is a much larger blast radius than a backup tool needs.
 
-4. **Secure Backup Storage**: Ensure backup destination has appropriate access controls
+4. **Secure Backup Storage**: Ensure backup destination has appropriate access controls — every dump holds application data, and `postgresql_backups/_globals_*.sql.gz` holds role password hashes
 
 5. **Don't Commit Secrets**: `config.yaml` and `.envrc` are already in `.gitignore`; keep it that way
 
@@ -234,8 +243,9 @@ If you encounter MySQL connection errors, verify:
 
 ### PostgreSQL Connection or Permission Errors
 
-`pg_dump` fails with `permission denied for table ...` when the configured
-user can connect but lacks `SELECT` on that database's tables — common when
+`pg_dump` (or `pg_dumpall` for the `_globals` dump) fails with
+`permission denied for table ...` when the configured user can connect but
+lacks `SELECT` on that database's tables — common when
 a database was provisioned with its own app-specific owning role. Fix by
 granting the backup user the read-only role (see Security Considerations
 above): `GRANT pg_read_all_data TO backup_user;`. This is a one-time,

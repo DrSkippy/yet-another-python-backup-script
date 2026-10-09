@@ -158,9 +158,13 @@ def create_mysql_dumps(databases, dest_dir, host='localhost', port=3306,
 
 
 def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
-                            username=None, password=None, compress=True, dryrun=True):
+                            username=None, password=None, compress=True,
+                            dump_globals=False, dryrun=True):
     """
     Create pg_dump files for a list of PostgreSQL databases.
+
+    Optionally also dumps cluster-wide globals (roles, role passwords,
+    tablespaces) via ``pg_dumpall --globals-only``, which pg_dump omits.
 
     Parameters
     ----------
@@ -178,6 +182,9 @@ def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
         PostgreSQL password (passed via PGPASSWORD env var)
     compress : bool, optional
         If True, gzip the dump files (default: True)
+    dump_globals : bool, optional
+        If True, also dump cluster globals to ``_globals_<timestamp>.sql[.gz]``
+        (default: False)
     dryrun : bool, optional
         If True, log actions without creating files (default: True)
 
@@ -185,11 +192,17 @@ def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
     -------
     tuple of (list of Path, list of str)
         Paths to the created dump files, and names of databases that failed
+        (``_globals`` if the globals dump failed)
     """
     logger = logging.getLogger(__name__)
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     logger.debug(f"PostgreSQL dump destination directory: {dest_dir}")
+
+    conn_args = [f'--host={host}', f'--port={port}', f'--username={username}']
+    jobs = [(db_name, ['pg_dump', *conn_args, db_name]) for db_name in databases]
+    if dump_globals:
+        jobs.append(('_globals', ['pg_dumpall', *conn_args, '--globals-only']))
 
     created_dumps = []
     failed_databases = []
@@ -201,17 +214,9 @@ def create_postgresql_dumps(databases, dest_dir, host='localhost', port=5432,
     if password:
         env['PGPASSWORD'] = password
 
-    for db_name in databases:
+    for db_name, cmd in jobs:
         extension = '.sql.gz' if compress else '.sql'
         dump_file = dest_dir / f"{db_name}_{timestamp}{extension}"
-
-        cmd = [
-            'pg_dump',
-            f'--host={host}',
-            f'--port={port}',
-            f'--username={username}',
-            db_name,
-        ]
 
         logger.debug(f"Dump file will be created at: {dump_file}")
 
@@ -384,7 +389,7 @@ def parse_arguments():
         Parsed command-line arguments
     """
     parser = argparse.ArgumentParser(
-        description='Yet Another Python Backup Script - Backup MySQL databases and files'
+        description='Yet Another Python Backup Script - Backup MySQL/PostgreSQL databases and files'
     )
 
     parser.add_argument(
@@ -611,6 +616,7 @@ if __name__ == '__main__':
             username=pg_config['username'],
             password=pg_password,
             compress=pg_config.get('compress', True),
+            dump_globals=pg_config.get('dump_globals', True),
             dryrun=dryrun
         )
 
